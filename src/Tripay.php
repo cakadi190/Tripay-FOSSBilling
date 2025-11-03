@@ -1,7 +1,8 @@
 <?php
+
 use Monolog\Logger;
-use Monolog\Handler\StreamHandler;
 use Monolog\Handler\RotatingFileHandler;
+
 if (ini_get('date.timezone') === '') {
     date_default_timezone_set('Asia/Jakarta');
 } else {
@@ -17,13 +18,13 @@ if (file_exists(__DIR__ . '/../vendor/autoload.php')) {
 }
 
 /**
- * Xendit FOSSBilling Integration.
+ * Tripay FOSSBilling Integration.
  *
  * @property mixed $apiId
- * @author github.com/FZFR | https://fazza.fr
- * 
+ * @author Cak Adi <cakadi190@gmail.com>
+ *
  */
-class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
+class Payment_Adapter_Tripay implements \FOSSBilling\InjectionAwareInterface
 {
     protected ?Pimple\Container $di = null;
     private array $config = [];
@@ -32,15 +33,19 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
     public function __construct($config)
     {
         $this->config = $config;
-        
+
         $apiKey = $this->getApiKey();
-        $webhookToken = $this->getWebhookToken();
-        
+        $privateKey = $this->getPrivateKey();
+        $merchantCode = $this->getMerchantCode();
+
         if (empty($apiKey)) {
-            throw new Payment_Exception('The ":pay_gateway" payment gateway is not fully configured. Please configure the :missing', [':pay_gateway' => 'Xendit', ':missing' => 'API Key']);
+            throw new Payment_Exception('The ":pay_gateway" payment gateway is not fully configured. Please configure the :missing', [':pay_gateway' => 'Tripay', ':missing' => 'API Key']);
         }
-        if (empty($webhookToken)) {
-            throw new Payment_Exception('The ":pay_gateway" payment gateway is not fully configured. Please configure the :missing', [':pay_gateway' => 'Xendit', ':missing' => 'Webhook Verification Token']);
+        if (empty($privateKey)) {
+            throw new Payment_Exception('The ":pay_gateway" payment gateway is not fully configured. Please configure the :missing', [':pay_gateway' => 'Tripay', ':missing' => 'Private Key']);
+        }
+        if (empty($merchantCode)) {
+            throw new Payment_Exception('The ":pay_gateway" payment gateway is not fully configured. Please configure the :missing', [':pay_gateway' => 'Tripay', ':missing' => 'Merchant Code']);
         }
 
         $this->initLogger();
@@ -48,12 +53,12 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
 
     private function initLogger(): void
     {
-        $this->logger = new Logger('Xendit');
+        $this->logger = new Logger('Tripay');
         $logDir = __DIR__ . '/logs';
         if (!is_dir($logDir)) {
             mkdir($logDir, 0755, true);
         }
-        $this->logger->pushHandler(new RotatingFileHandler($logDir . '/xendit.log', 0, Logger::DEBUG));
+        $this->logger->pushHandler(new RotatingFileHandler($logDir . '/tripay.log', 0, Logger::DEBUG));
     }
 
     public function setDi(Pimple\Container $di): void
@@ -70,9 +75,9 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
     {
         return [
             'supports_one_time_payments' => true,
-            'description' => 'Configure Xendit API key and Webhook Verification Token to start accepting payments via Xendit.',
+            'description' => 'Configure Tripay API Key, Private Key, and Merchant Code to start accepting payments via Tripay.',
             'logo' => [
-                'logo' => 'Xendit.png',
+                'logo' => 'Tripay.png',
                 'height' => '60px',
                 'width' => '60px',
             ],
@@ -80,28 +85,42 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
                 'api_key' => [
                     'text',
                     [
-                        'label' => 'Xendit API Key',
+                        'label' => 'Tripay API Key',
                         'required' => true,
                     ],
                 ],
                 'sandbox_api_key' => [
                     'text',
                     [
-                        'label' => 'Xendit Sandbox API Key',
+                        'label' => 'Tripay Sandbox API Key',
                         'required' => false,
                     ],
                 ],
-                'webhook_token' => [
+                'private_key' => [
                     'text',
                     [
-                        'label' => 'Webhook Verification Token',
+                        'label' => 'Tripay Private Key',
                         'required' => true,
                     ],
                 ],
-                'sandbox_webhook_token' => [
+                'sandbox_private_key' => [
                     'text',
                     [
-                        'label' => 'Sandbox Webhook Verification Token',
+                        'label' => 'Tripay Sandbox Private Key',
+                        'required' => false,
+                    ],
+                ],
+                'merchant_code' => [
+                    'text',
+                    [
+                        'label' => 'Merchant Code',
+                        'required' => true,
+                    ],
+                ],
+                'sandbox_merchant_code' => [
+                    'text',
+                    [
+                        'label' => 'Sandbox Merchant Code',
                         'required' => false,
                     ],
                 ],
@@ -141,35 +160,35 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
     {
         try {
             $invoice = $this->di['db']->getExistingModelById('Invoice', $invoice_id, 'Invoice not found');
-            $xenditInvoice = $this->createXenditInvoice($invoice);
-            
+            $tripayTransaction = $this->createTripayTransaction($invoice);
+
             if ($this->config['enable_logging']) {
-                $this->logger->info('Xendit invoice created: ' . json_encode($xenditInvoice));
+                $this->logger->info('Tripay transaction created: ' . json_encode($tripayTransaction));
             }
-            
-            return $this->generatePaymentForm($xenditInvoice['invoice_url'], $invoice->id);
+
+            return $this->generatePaymentForm($tripayTransaction['data']['checkout_url'], $invoice->id);
         } catch (Exception $e) {
             if ($this->config['enable_logging']) {
                 $this->logger->error('Error in getHtml: ' . $e->getMessage());
             }
-            throw new Payment_Exception('Error processing Xendit payment: ' . $e->getMessage());
+            throw new Payment_Exception('Error processing Tripay payment: ' . $e->getMessage());
         }
     }
 
-    private function generatePaymentForm($invoiceUrl, $invoiceId): string
+    private function generatePaymentForm($checkoutUrl, $invoiceId): string
     {
-        $html = '<form id="xendit-payment-form" method="get" action="' . $invoiceUrl . '">';
-        $html .= '<input type="hidden" name="external_id" value="' . $invoiceId . '">';
-        $html .= '<input type="submit" value="Pay with Xendit" style="display:none;">';
+        $html = '<form id="tripay-payment-form" method="get" action="' . $checkoutUrl . '">';
+        $html .= '<input type="hidden" name="merchant_ref" value="' . $invoiceId . '">';
+        $html .= '<input type="submit" value="Pay with Tripay" style="display:none;">';
         $html .= '</form>';
-        $html .= '<script type="text/javascript">document.getElementById("xendit-payment-form").submit();</script>';
+        $html .= '<script type="text/javascript">document.getElementById("tripay-payment-form").submit();</script>';
         return $html;
     }
 
 
     public function recurrentPayment($api_admin, $id, $data, $gateway_id)
     {
-        throw new Payment_Exception('Xendit does not support recurrent payments');
+        throw new Payment_Exception('Tripay does not support recurrent payments');
     }
 
     public function processTransaction($api_admin, $id, $data, $gateway_id)
@@ -183,27 +202,27 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
                 ]));
             }
 
-            $xenditData = null;
+            $tripayData = null;
             if (isset($data['http_raw_post_data'])) {
-                $xenditData = json_decode($data['http_raw_post_data'], true);
+                $tripayData = json_decode($data['http_raw_post_data'], true);
             } elseif (is_string($data)) {
-                $xenditData = json_decode($data, true);
+                $tripayData = json_decode($data, true);
             } else {
-                $xenditData = $data;
+                $tripayData = $data;
             }
 
-            if (!$xenditData) {
-                throw new \Exception('Invalid data received from Xendit');
+            if (!$tripayData) {
+                throw new \Exception('Invalid data received from Tripay');
             }
 
-            $invoice_id = $xenditData['external_id'] ?? null;
-            
+            $invoice_id = $tripayData['merchant_ref'] ?? null;
+
             if (!$invoice_id) {
-                throw new \Exception('Invalid Xendit callback: missing external_id');
+                throw new \Exception('Invalid Tripay callback: missing merchant_ref');
             }
 
             $this->logger->info('Looking for invoice with ID: ' . $invoice_id);
-            
+
             $invoice = $this->di['db']->getExistingModelById('Invoice', $invoice_id, 'Invoice not found');
 
             $tx = $this->di['db']->findOne('Transaction', 'invoice_id = ?', [$invoice_id]);
@@ -219,13 +238,13 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
             $invoiceService = $this->di['mod_service']('Invoice');
             $invoiceTotal = $invoiceService->getTotalWithTax($invoice);
 
-            $tx_desc = 'Payment Method: ' . ($xenditData['payment_method'] ?? 'Unknown') . ' - ' . ($xenditData['payment_channel'] ?? 'Unknown') . ' - ' . 'Ref no: ' . ($xenditData['id'] ?? 'Unknown');
+            $tx_desc = 'Payment Method: ' . ($tripayData['payment_method'] ?? 'Unknown') . ' - ' . ($tripayData['payment_name'] ?? 'Unknown') . ' - ' . 'Ref no: ' . ($tripayData['reference'] ?? 'Unknown');
             $clientService->addFunds($client, $invoiceTotal, $tx_desc, []);
 
             $invoiceService->markAsPaid($invoice);
 
             $tx->status = 'complete';
-            $tx->txn_id = $xenditData['id'] ?? null;
+            $tx->txn_id = $tripayData['reference'] ?? null;
             $tx->amount = $invoiceTotal;
             $tx->currency = $invoice->currency;
             $tx->updated_at = date('Y-m-d H:i:s');
@@ -249,20 +268,32 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
     {
         $rawInput = file_get_contents('php://input');
         $ipn = json_decode($rawInput, true);
-        
+
         if ($this->config['enable_logging']) {
-            $this->logger->info('Xendit webhook raw input: ' . $rawInput);
-            $this->logger->info('Xendit webhook decoded: ' . json_encode($ipn));
+            $this->logger->info('Tripay webhook raw input: ' . $rawInput);
+            $this->logger->info('Tripay webhook decoded: ' . json_encode($ipn));
         }
 
-        if (!isset($ipn['external_id'])) {
-            $this->logger->error('Invalid Xendit callback: missing external_id');
+        // Verify callback signature
+        $callbackSignature = $_SERVER['HTTP_X_CALLBACK_SIGNATURE'] ?? '';
+        $privateKey = $this->getPrivateKey();
+
+        $calculatedSignature = hash_hmac('sha256', $rawInput, $privateKey);
+
+        if ($callbackSignature !== $calculatedSignature) {
+            $this->logger->error('Invalid Tripay callback signature');
             http_response_code(400);
             return false;
         }
 
-        $invoice_id = $ipn['external_id'];
-        
+        if (!isset($ipn['merchant_ref'])) {
+            $this->logger->error('Invalid Tripay callback: missing merchant_ref');
+            http_response_code(400);
+            return false;
+        }
+
+        $invoice_id = $ipn['merchant_ref'];
+
         try {
             $tx = $this->di['db']->find_one('Transaction', 'invoice_id = ?', [$invoice_id]);
             if (!$tx) {
@@ -274,24 +305,29 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
             switch ($ipn['status']) {
                 case 'PAID':
                     return $this->processTransaction(null, $invoice_id, $ipn, $this->config['id']);
-                
+
                 case 'EXPIRED':
                     $tx->txn_status = 'expired';
-                    $tx->error = 'Xendit payment expired';
+                    $tx->error = 'Tripay payment expired';
                     break;
-                
-                case 'PENDING':
+
+                case 'UNPAID':
                     $tx->txn_status = 'pending';
                     break;
-                
+
                 case 'FAILED':
                     $tx->txn_status = 'failed';
-                    $tx->error = 'Xendit payment failed';
+                    $tx->error = 'Tripay payment failed';
                     break;
-                
+
+                case 'REFUND':
+                    $tx->txn_status = 'refunded';
+                    $tx->error = 'Tripay payment refunded';
+                    break;
+
                 default:
                     $tx->txn_status = 'unknown';
-                    $tx->error = 'Unknown Xendit payment status: ' . $ipn['status'];
+                    $tx->error = 'Unknown Tripay payment status: ' . $ipn['status'];
                     break;
             }
 
@@ -311,7 +347,7 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
         }
     }
 
-    private function createXenditInvoice($invoice)
+    private function createTripayTransaction($invoice)
     {
         $invoiceService = $this->di['mod_service']('Invoice');
 
@@ -320,77 +356,100 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
         }
 
         $thankyou_url = $this->di['url']->link('invoice/' . $invoice->hash, [
-            'bb_invoice_id' => $invoice->id, 
+            'bb_invoice_id' => $invoice->id,
             'bb_gateway_id' => $this->config['id'],
             'restore_session' => session_id()
         ]);
         $invoice_url = $this->di['tools']->url('invoice/' . $invoice->hash, ['restore_session' => session_id()]);
 
-        $items = $this->di['db']->getAll("SELECT title FROM invoice_item WHERE invoice_id = :invoice_id", [':invoice_id' => $invoice->id]);
-        
-        $description = $this->createDetailedDescription($invoice, $items);
+        $items = $this->di['db']->getAll("SELECT title, price, quantity FROM invoice_item WHERE invoice_id = :invoice_id", [':invoice_id' => $invoice->id]);
+
+        $orderItems = [];
+        foreach ($items as $item) {
+            $orderItems[] = [
+                'name' => $item['title'],
+                'price' => (int) $item['price'],
+                'quantity' => (int) ($item['quantity'] ?? 1),
+            ];
+        }
+
+        $merchantRef = 'INV-' . $invoice->id . '-' . time();
+        $amount = (int) $invoiceService->getTotalWithTax($invoice);
+
+        // Generate signature
+        $signature = $this->generateSignature($merchantRef, $amount);
 
         $data = [
-            'external_id' => (string) $invoice->id,
-            'amount' => $invoiceService->getTotalWithTax($invoice),
-            'payer_email' => $invoice->buyer_email,
-            'description' => $description,
-            'success_redirect_url' => $thankyou_url,
-            'failure_redirect_url' => $invoice_url,
-            'currency' => $invoice->currency,
+            'method' => '',  // Payment method code, empty for payment selection page
+            'merchant_ref' => $merchantRef,
+            'amount' => $amount,
+            'customer_name' => $invoice->buyer_first_name . ' ' . $invoice->buyer_last_name,
+            'customer_email' => $invoice->buyer_email,
+            'customer_phone' => $invoice->buyer_phone ?? '08123456789',
+            'order_items' => $orderItems,
+            'return_url' => $thankyou_url,
+            'expired_time' => (time() + (24 * 60 * 60)), // 24 hours from now
+            'signature' => $signature,
         ];
 
         if ($this->config['enable_logging']) {
-            $this->logger->info('Creating Xendit invoice with data: ' . json_encode($data));
+            $this->logger->info('Creating Tripay transaction with data: ' . json_encode($data));
         }
 
+        $apiUrl = $this->getApiUrl() . '/transaction/create';
+
         $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, 'https://api.xendit.co/v2/invoices');
+        curl_setopt($ch, CURLOPT_URL, $apiUrl);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_POST, 1);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Content-Type: application/json',
-            'Authorization: Basic ' . base64_encode($this->getApiKey() . ':')
+            'Authorization: Bearer ' . $this->getApiKey()
         ]);
 
         $response = curl_exec($ch);
         if (curl_errno($ch)) {
             if ($this->config['enable_logging']) {
-                $this->logger->error('Xendit API Error: ' . curl_error($ch));
+                $this->logger->error('Tripay API Error: ' . curl_error($ch));
             }
-            throw new Payment_Exception('Error creating Xendit invoice: ' . curl_error($ch));
+            throw new Payment_Exception('Error creating Tripay transaction: ' . curl_error($ch));
         }
         curl_close($ch);
 
         $result = json_decode($response, true);
-        if (!isset($result['invoice_url'])) {
+        if (!isset($result['data']['checkout_url'])) {
             if ($this->config['enable_logging']) {
-                $this->logger->error('Xendit API Error: ' . $response);
+                $this->logger->error('Tripay API Error: ' . $response);
             }
-            throw new Payment_Exception('Invalid response from Xendit: ' . $response);
+            throw new Payment_Exception('Invalid response from Tripay: ' . ($result['message'] ?? $response));
         }
 
         if ($this->config['enable_logging']) {
-            $this->logger->info('Xendit invoice created: ' . json_encode($result));
+            $this->logger->info('Tripay transaction created: ' . json_encode($result));
         }
 
         return $result;
     }
 
-    private function createDetailedDescription($invoice, $items)
+    private function generateSignature($merchantRef, $amount)
     {
-        $description = "Invoice " . $invoice->serie . $invoice->nr;
-        
-        foreach ($items as $item) {
-            $description .= " | " . $item['title'];
-        }
-        
-        if (strlen($description) > 255) {
-            $description = substr($description, 0, 252) . '...';
+        $merchantCode = $this->getMerchantCode();
+        $privateKey = $this->getPrivateKey();
+
+        $signature = hash_hmac('sha256', $merchantCode . $merchantRef . $amount, $privateKey);
+
+        if ($this->config['enable_logging']) {
+            $this->logger->info('Generated signature for: ' . $merchantCode . $merchantRef . $amount);
         }
 
-        return $description;
+        return $signature;
+    }
+
+    private function getApiUrl()
+    {
+        $baseUrl = $this->config['use_sandbox'] ? 'https://tripay.co.id/api-sandbox' : 'https://tripay.co.id/api';
+        return $baseUrl;
     }
 
     private function getApiKey()
@@ -398,8 +457,13 @@ class Payment_Adapter_Xendit implements \FOSSBilling\InjectionAwareInterface
         return $this->config['use_sandbox'] ? $this->config['sandbox_api_key'] : $this->config['api_key'];
     }
 
-    private function getWebhookToken()
+    private function getPrivateKey()
     {
-        return $this->config['use_sandbox'] ? $this->config['sandbox_webhook_token'] : $this->config['webhook_token'];
+        return $this->config['use_sandbox'] ? $this->config['sandbox_private_key'] : $this->config['private_key'];
+    }
+
+    private function getMerchantCode()
+    {
+        return $this->config['use_sandbox'] ? $this->config['sandbox_merchant_code'] : $this->config['merchant_code'];
     }
 }

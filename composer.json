@@ -1,6 +1,10 @@
 {
-    "name": "fzfr/xendit-fossbilling",
+    "name": "fzfr/tripay-fossbilling",
+    "description": "Tripay Payment Gateway Integration for FOSSBilling",
     "type": "library",
+    "keywords": ["tripay", "payment", "gateway", "fossbilling", "billing"],
+    "homepage": "https://github.com/FZFR/Tripay-FOSSBilling",
+    "license": "Apache-2.0",
     "authors": [
         {
             "name": "FZFR",
@@ -9,7 +13,8 @@
     ],
     "require": {
         "php": ">=8.0",
-        "ext-json": "*",        
-        "monolog/monolog": "*"        
+        "ext-json": "*",
+        "ext-curl": "*",
+        "monolog/monolog": "*"
     }
 }
